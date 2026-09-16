@@ -1,0 +1,10 @@
+/build/
+/dist/
+/.zig-cache/
+*.dll
+*.exe
+*.obj
+*.o
+*.lib
+*.pdb
+*.log
