@@ -18,6 +18,8 @@ struct Source {
     bool automatic=true;
     float elapsed=0;
     std::string window;
+    HWND targetWindow=nullptr;
+    DWORD targetPid=0;
 };
 static void Reader(Source* s){
     HANDLE mapping=nullptr,process=nullptr;Live::Shared* mem=nullptr;
@@ -74,13 +76,19 @@ static BOOL CALLBACK FindWindow(HWND w,LPARAM param){
 static void Tick(void* data,float seconds){
     auto s=(Source*)data;s->elapsed+=seconds;
     if(!s->automatic||s->elapsed<1||!s->video)return;s->elapsed=0;
-    DWORD pid=s->pid.load();if(!pid)return;
+    DWORD pid=s->pid.load();if(!pid){s->targetWindow=nullptr;s->targetPid=0;return;}
+    DWORD windowPid=0;
+    if(s->targetWindow&&s->targetPid==pid&&IsWindow(s->targetWindow)){
+        GetWindowThreadProcessId(s->targetWindow,&windowPid);
+        if(windowPid==pid)return;
+    }
     WindowSearch search{pid};EnumWindows(FindWindow,(LPARAM)&search);if(!search.window)return;
     wchar_t title[1024]{},cls[512]{},path[32768]{};GetWindowTextW(search.window,title,1024);GetClassNameW(search.window,cls,512);
     HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid);if(!process)return;
     DWORD count=32768;BOOL ok=QueryFullProcessImageNameW(process,0,path,&count);CloseHandle(process);if(!ok)return;
     const wchar_t* exe=wcsrchr(path,L'\\');exe=exe?exe+1:path;
     std::string window=Escape(Utf8(title))+":"+Escape(Utf8(cls))+":"+Escape(Utf8(exe));
+    s->targetWindow=search.window;s->targetPid=pid;
     if(window==s->window)return;s->window=window;
     auto settings=obs_source_get_settings(s->video);
     obs_data_set_string(settings,"capture_mode","window");obs_data_set_string(settings,"window",window.c_str());
@@ -89,7 +97,7 @@ static void Tick(void* data,float seconds){
     blog(LOG_INFO,"[iidx-live] Video target: %s",window.c_str());
 }
 static void Update(void* data,obs_data_t* settings){
-    auto s=(Source*)data;s->automatic=obs_data_get_bool(settings,"iidx_auto_window");s->window.clear();
+    auto s=(Source*)data;s->automatic=obs_data_get_bool(settings,"iidx_auto_window");s->window.clear();s->targetWindow=nullptr;s->targetPid=0;
     if(s->video){
         obs_data_set_bool(settings,"capture_audio",false);
         if(s->automatic){obs_data_set_int(settings,"priority",1);obs_data_set_string(settings,"capture_mode","window");}
@@ -137,7 +145,7 @@ static void Render(void* data,gs_effect_t*){
     // Fixed source dimensions preserve OBS transforms across attach/restart.
     // Fit unusual capture sizes without distorting the aspect ratio.
     float scale=std::min(1920.0f/w,1080.0f/h);
-    Rectangle(0,0,1920,1080,0,0,0);
+    if((uint64_t)w*1080!=(uint64_t)h*1920)Rectangle(0,0,1920,1080,0,0,0);
     gs_matrix_push();gs_matrix_translate3f((1920-w*scale)/2,(1080-h*scale)/2,0);
     gs_matrix_scale3f(scale,scale,1);obs_source_video_render(s->video);gs_matrix_pop();
 }

@@ -8,6 +8,12 @@
 static HMODULE self=GetModuleHandleW(nullptr);
 static void Log(const wchar_t*){}
 #include "main-screen.h"
+static WNDPROC previousProc;
+static unsigned titleQueries=0;
+static LRESULT CALLBACK CountTitle(HWND w,UINT msg,WPARAM wp,LPARAM lp){
+    if(msg==WM_GETTEXT)++titleQueries;
+    return CallWindowProcW(previousProc,w,msg,wp,lp);
+}
 int main(int argc,char** argv){
     assert(argc==2);assert(MH_Initialize()==MH_OK);assert(MainScreen::Install());
     HMODULE caller=LoadLibraryA(argv[1]);assert(caller);
@@ -17,6 +23,8 @@ int main(int argc,char** argv){
     auto create=(HRESULT(WINAPI*)(UINT,IDirect3D9Ex**))GetProcAddress(GetModuleHandleW(L"d3d9.dll"),"Direct3DCreate9Ex");
     IDirect3D9Ex* api=nullptr;assert(SUCCEEDED(create(D3D_SDK_VERSION,&api)));
     HWND window=CreateWindowExW(0,L"STATIC",L"beatmania IIDX test main",WS_POPUP,0,0,1920,1080,nullptr,nullptr,self,nullptr);assert(window);
+    previousProc=(WNDPROC)SetWindowLongPtrW(window,GWLP_WNDPROC,(LONG_PTR)&CountTitle);
+    MainScreen::RefreshMainWindow();assert(MainScreen::mainWindow.load()==window);
     D3DPRESENT_PARAMETERS pp{};pp.Windowed=TRUE;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;pp.hDeviceWindow=window;
     pp.BackBufferWidth=1920;pp.BackBufferHeight=1080;pp.BackBufferFormat=D3DFMT_X8R8G8B8;
     IDirect3DDevice9Ex* device=nullptr;assert(SUCCEEDED(api->CreateDeviceEx(0,D3DDEVTYPE_HAL,window,D3DCREATE_HARDWARE_VERTEXPROCESSING|D3DCREATE_MULTITHREADED|D3DCREATE_NOWINDOWCHANGES,&pp,nullptr,&device)));
@@ -27,9 +35,13 @@ int main(int argc,char** argv){
     assert(SUCCEEDED(device->GetRenderTarget(0,&got))&&got==sub);got->Release();
     assert(SUCCEEDED(read(device,0,&got))&&got==main);D3DSURFACE_DESC desc{};got->GetDesc(&desc);assert(desc.Width==1920&&desc.Height==1080);got->Release();
     assert(SUCCEEDED(device->GetRenderTarget(0,&got))&&got==sub);got->Release();
+    unsigned before=titleQueries;
+    for(int i=0;i<10000;i++){assert(SUCCEEDED(read(device,0,&got))&&got==main);got->Release();}
+    assert(titleQueries==before);
     SetWindowTextW(window,L"beatmania IIDX test sub");
+    MainScreen::RefreshMainWindow();assert(!MainScreen::mainWindow.load());
     assert(SUCCEEDED(read(device,0,&got))&&got==sub);got->Release();
     device->SetRenderTarget(0,main);sub->Release();main->Release();device->Release();api->Release();DestroyWindow(window);
     MH_DisableHook(MH_ALL_HOOKS);MH_Uninitialize();FreeLibrary(caller);
-    puts("PASS: OBS caller receives main 1920x1080 backbuffer while sub target is bound; game queries and non-main devices unchanged");
+    puts("PASS: main backbuffer, game/sub isolation, cache invalidation; 10000 capture calls send zero window-title messages");
 }

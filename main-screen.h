@@ -8,17 +8,32 @@ namespace MainScreen {
 using GetTarget=HRESULT(STDMETHODCALLTYPE*)(IDirect3DDevice9*,DWORD,IDirect3DSurface9**);
 static GetTarget original=nullptr;
 static std::atomic<uintptr_t> obsBegin{0},obsEnd{0};
+static std::atomic<HWND> mainWindow{nullptr};
 static bool IsMainWindow(HWND window){
     wchar_t title[512]{};if(!GetWindowTextW(window,title,512))return false;
     size_t n=wcslen(title);
     return wcsstr(title,L"beatmania IIDX")&&n>=5&&!_wcsicmp(title+n-5,L" main");
 }
 static bool IsObsCaller(uintptr_t caller){return caller>=obsBegin.load()&&caller<obsEnd.load();}
+static BOOL CALLBACK FindMainWindow(HWND window,LPARAM result){
+    DWORD pid=0;GetWindowThreadProcessId(window,&pid);
+    if(pid==GetCurrentProcessId()&&IsMainWindow(window)){
+        *(HWND*)result=window;return FALSE;
+    }
+    return TRUE;
+}
+static void RefreshMainWindow(){
+    HWND found=nullptr;EnumWindows(FindMainWindow,(LPARAM)&found);
+    mainWindow.store(found,std::memory_order_release);
+}
 static HRESULT STDMETHODCALLTYPE Target(IDirect3DDevice9* device,DWORD index,IDirect3DSurface9** surface){
     uintptr_t caller=(uintptr_t)__builtin_return_address(0);
     if(index==0&&surface&&IsObsCaller(caller)){
         D3DDEVICE_CREATION_PARAMETERS cp{};
-        if(SUCCEEDED(device->GetCreationParameters(&cp))&&IsMainWindow(cp.hFocusWindow)){
+        // GetWindowText on a window in this process can synchronously message
+        // its owning thread. Never do that from a per-frame D3D callback.
+        HWND main=mainWindow.load(std::memory_order_acquire);
+        if(main&&SUCCEEDED(device->GetCreationParameters(&cp))&&cp.hFocusWindow==main){
             // Swap chain 0 is the main 1920x1080 screen; chain 1 is TDJ sub.
             // GetBackBuffer adds the reference expected by OBS. Do not rebind
             // render targets and do not fall back to a possibly wrong screen.
@@ -52,6 +67,7 @@ static bool Install(){
 static void TrackObs(){
     HMODULE last=nullptr;
     for(;;){
+        RefreshMainWindow();
         HMODULE module=GetModuleHandleW(L"graphics-hook64.dll");
         if(module!=last){
             obsEnd=0;obsBegin=0;
@@ -63,7 +79,7 @@ static void TrackObs(){
             }
             last=module;
         }
-        Sleep(100);
+        Sleep(500);
     }
 }
 }
